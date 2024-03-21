@@ -1,7 +1,7 @@
-use crate::dom::{AttrMap, Element, Node};
-use combine::error::ParseError;
+use crate::dom::{AttrMap, Element, Node, Text};
+use combine::error::{ParseError, StreamError};
 use combine::parser::char::{char, letter, newline, space};
-use combine::{between, many, many1, parser, satisfy, sep_by, Parser, Stream};
+use combine::{attempt, between, choice, many, many1, parser, satisfy, sep_by, Parser, Stream};
 
 /// `attribute` consumes `name="value"`.
 fn attribute<Input>() -> impl Parser<Input, Output = (String, String)>
@@ -48,8 +48,20 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    todo!("you need to implement this combinator");
-    (char(' ')).map(|_| ("".to_string(), AttrMap::new()))
+    // 特定のもので囲まれている場合は，それはbetweenを使う
+    // ので，それは後で考えて，中身のパーサを先に考える
+
+    // タグ名のパーサ
+    let open_tag_name = many1::<String, _, _>(letter());
+    // タグコンテンツのパーサ
+    let open_tag_content = (
+        open_tag_name,
+        many::<String, _, _>(space().or(newline())),
+        attributes(),
+    )
+        .map(|v| (v.0, v.2));
+    // <>で囲まれたタグコンテンツをパースする
+    between(char('<'), char('>'), open_tag_content)
 }
 
 /// close_tag consumes `</tag_name>`.
@@ -58,8 +70,9 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    todo!("you need to implement this combinator");
-    (char(' ')).map(|_| ("".to_string()))
+    let close_tag_name = many1::<String, _, _>(letter());
+    let close_tag_content = (char('/'), close_tag_name).map(|v| v.1);
+    between(char('<'), char('>'), close_tag_content)
 }
 
 // `nodes_` (and `nodes`) tries to parse input as Element or Text.
@@ -68,8 +81,11 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    todo!("you need to implement this combinator");
-    (char(' ')).map(|_| vec![Element::new("".into(), AttrMap::new(), vec![])])
+    // element() または text() のいずれかをパースする
+    // attemptは、パーサーが失敗した場合でも元の入力に戻ることを保証します。これにより、一度失敗したパーサーの後に別のパーサーを試すことができます。
+    // choiceは、与えられたパーサーの中から最初に成功したものを選択します。ここではelement()パーサーとtext()パーサーのどちらかが成功するまで試みます。
+    // manyは、指定したパーサーが成功する限り繰り返し適用し、その結果をコレクションに格納します。ここではchoiceパーサーの結果を集めます。
+    attempt(many(choice((attempt(element()), attempt(text())))))
 }
 
 /// `text` consumes input until `<` comes.
@@ -78,8 +94,8 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    todo!("you need to implement this combinator");
-    (char(' ')).map(|_| Element::new("".into(), AttrMap::new(), vec![]))
+    // satisfy(|c| c != '<')は、与えられた条件（ここでは文字が<でないこと）を満たす文字をパースするパーサーを作成します
+    many1(satisfy(|c| c != '<')).map(|t| Text::new(t))
 }
 
 /// `element` consumes `<tag_name attr_name="attr_value" ...>(children)</tag_name>`.
@@ -88,8 +104,21 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    todo!("you need to implement this combinator");
-    (char(' ')).map(|_| Element::new("".into(), AttrMap::new(), vec![]))
+    (open_tag(), nodes(), close_tag()).and_then(
+        |((open_tag_name, attributes), children, close_tag_name)| {
+            if open_tag_name == close_tag_name {
+                Ok(Element::new(open_tag_name, attributes, children))
+            } else {
+                Err(<Input::Error as combine::error::ParseError<
+                    Input::Token,
+                    Input::Range,
+                    Input::Position,
+                >>::StreamError::message_static_message(
+                    "tag name mismatch"
+                ))
+            }
+        },
+    )
 }
 
 parser! {
